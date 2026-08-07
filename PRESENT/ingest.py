@@ -3,11 +3,20 @@ from pathlib import Path
 from pptx import Presentation
 
 
+def _normalize_powerpoint_text(text: str) -> str:
+    """Normalize PowerPoint paragraph/soft-break characters for parsing."""
+    return (
+        text.replace("\x0b", "\n")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
+
+
 def extract_slide_text(slide) -> str:
     parts = []
     for shape in slide.shapes:
         if hasattr(shape, "text") and shape.text:
-            text = shape.text.strip()
+            text = _normalize_powerpoint_text(shape.text).strip()
             if text:
                 parts.append(text)
     return "\n".join(parts)
@@ -76,6 +85,8 @@ def _clean_lines(block: str) -> list[str]:
 
 
 def markdown_to_slide_spec(markdown_text: str) -> dict:
+    markdown_text = _normalize_powerpoint_text(markdown_text)
+
     blueprint_match = re.search(
         r"# Slide Blueprint\s*(.*?)(?:# Presentation Style Guide|\Z)",
         markdown_text,
@@ -103,7 +114,11 @@ def markdown_to_slide_spec(markdown_text: str) -> dict:
         fields = {}
         body_lines = []
         for line in lines:
-            key_match = re.match(r"^(Title|Subtitle|Headline|Subheadline|Message|Visual|Content|Center|Explain):\s*(.*)$", line, re.I)
+            key_match = re.match(
+                r"^(Title|Subtitle|Headline|Subheadline|Message|Visual|Content|Center|Explain):\s*(.*)$",
+                line,
+                re.I,
+            )
             if key_match:
                 fields[key_match.group(1).lower()] = key_match.group(2).strip().strip("*")
             else:
