@@ -1,7 +1,6 @@
 from pptx.dml.color import RGBColor
 from pptx.util import Inches, Pt
 
-# PRESENT MVE design tokens. Keep centralized so decks remain consistent.
 SLIDE_WIDTH = Inches(13.333)
 SLIDE_HEIGHT = Inches(7.5)
 
@@ -9,17 +8,27 @@ FONT_HEADLINE = "Aptos Display"
 FONT_BODY = "Aptos"
 
 PEARL_WHITE = RGBColor(247, 246, 242)
+WHITE = RGBColor(255, 255, 255)
 CHARCOAL = RGBColor(31, 36, 42)
 DEEP_BLUE = RGBColor(18, 48, 74)
+MID_BLUE = RGBColor(44, 79, 105)
 SOFT_TEAL = RGBColor(78, 154, 151)
+LIGHT_TEAL = RGBColor(219, 237, 234)
 GOLD = RGBColor(184, 151, 86)
+LIGHT_GOLD = RGBColor(239, 230, 209)
 MUTED = RGBColor(105, 113, 121)
-WHITE = RGBColor(255, 255, 255)
+LIGHT_GRAY = RGBColor(231, 232, 230)
+PALE_BLUE = RGBColor(226, 235, 241)
 
-TITLE_SIZE = Pt(30)
-HERO_SIZE = Pt(40)
-BODY_SIZE = Pt(17)
+TITLE_SIZE = Pt(29)
+HERO_SIZE = Pt(42)
+SUBTITLE_SIZE = Pt(18)
+BODY_SIZE = Pt(16)
+CARD_TITLE_SIZE = Pt(17)
 SMALL_SIZE = Pt(11)
+MICRO_SIZE = Pt(9)
 
-MARGIN_X = Inches(0.8)
-MARGIN_Y = Inches(0.55)
+MARGIN_X = Inches(0.72)
+MARGIN_Y = Inches(0.52)
+CONTENT_TOP = Inches(1.55)
+BOTTOM_MARGIN = Inches(0.42)
