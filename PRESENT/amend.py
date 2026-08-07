@@ -10,6 +10,33 @@ from ingest import find_embedded_markdown, inspect_deck, markdown_to_slide_spec
 
 
 ProgressCallback = Callable[[str], None] | None
+IMAGE_FRIENDLY_TYPES = {"hero", "metaphor", "ecosystem", "statement"}
+
+
+def _assign_source_assets(spec: dict, assets: list[dict]) -> None:
+    """Reuse a few source-deck images deterministically without asking Gemma to inspect them."""
+    if not assets:
+        return
+
+    preferred = sorted(assets, key=lambda asset: (asset.get("slide", 999), asset.get("id", "")))
+    asset_ids = [asset["id"] for asset in preferred]
+    used = set()
+    cursor = 0
+
+    for slide in spec.get("slides", []):
+        if slide.get("type") not in IMAGE_FRIENDLY_TYPES:
+            continue
+        if slide.get("asset_id"):
+            continue
+
+        while cursor < len(asset_ids) and asset_ids[cursor] in used:
+            cursor += 1
+        if cursor >= len(asset_ids):
+            break
+
+        slide["asset_id"] = asset_ids[cursor]
+        used.add(asset_ids[cursor])
+        cursor += 1
 
 
 def amend_deck(
@@ -34,26 +61,21 @@ def amend_deck(
     report("Locating the embedded Markdown presentation brief...")
     markdown_slide, markdown_text = find_embedded_markdown(str(source))
 
-    report("Extracting and cataloging source-deck images...")
+    report("Extracting reusable source-deck images...")
     asset_dir = output.parent / ".present_assets" / source.stem
-    assets, contact_sheet = extract_source_assets(str(source), asset_dir)
+    assets, _contact_sheet = extract_source_assets(str(source), asset_dir)
 
     planner = "deterministic parser"
     agent_error = None
 
     if use_agent:
         try:
-            report("Inspecting the existing deck structure and content...")
+            report("Summarizing the existing deck for the local Gemma planner...")
             deck_info = inspect_deck(str(source))
 
-            report("Asking local Gemma to plan the presentation and visual treatments...")
-            spec = plan_deck_with_gemma(
-                deck_info,
-                markdown_text,
-                assets=assets,
-                contact_sheet=contact_sheet,
-            )
-            planner = "local Gemma via Ollama + source-image vision"
+            report("Asking local Gemma for a fast text-only slide plan...")
+            spec = plan_deck_with_gemma(deck_info, markdown_text)
+            planner = "local Gemma via Ollama (fast text-only plan)"
         except (LocalAgentUnavailable, ValueError) as exc:
             agent_error = str(exc)
             report("Gemma planning was unavailable; using PRESENT's deterministic fallback...")
@@ -61,6 +83,9 @@ def amend_deck(
     else:
         report("Parsing the embedded Markdown presentation blueprint...")
         spec = markdown_to_slide_spec(markdown_text)
+
+    report("Assigning reusable source imagery to selected visual slides...")
+    _assign_source_assets(spec, assets)
 
     report("Opening the source PowerPoint and preserving existing slides...")
     prs = Presentation(source)
@@ -84,5 +109,4 @@ def amend_deck(
         "planner": planner,
         "agent_error": agent_error,
         "asset_count": len(assets),
-        "contact_sheet": contact_sheet,
     }
