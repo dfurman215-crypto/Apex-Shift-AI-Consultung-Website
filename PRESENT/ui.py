@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 import sys
@@ -6,11 +5,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from builder import build_deck
+from amend import amend_deck
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_SPEC = BASE_DIR / "specs" / "pearl.json"
 DEFAULT_OUTPUT = BASE_DIR / "output" / "PEARL_PRESENT_MVE.pptx"
 
 
@@ -18,12 +16,12 @@ class PresentUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PRESENT MVE")
-        self.geometry("760x330")
-        self.minsize(700, 300)
+        self.geometry("820x360")
+        self.minsize(760, 330)
 
-        self.spec_var = tk.StringVar(value=str(DEFAULT_SPEC))
+        self.source_var = tk.StringVar(value="")
         self.output_var = tk.StringVar(value=str(DEFAULT_OUTPUT))
-        self.status_var = tk.StringVar(value="Ready")
+        self.status_var = tk.StringVar(value="Choose your existing PowerPoint to begin.")
 
         self._build_ui()
 
@@ -36,14 +34,14 @@ class PresentUI(tk.Tk):
         )
         ttk.Label(
             root,
-            text="Minimal interface for building PowerPoint decks from PRESENT specifications.",
+            text="Use an existing PowerPoint as the source deck and build from its embedded Markdown instructions.",
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 18))
 
-        ttk.Label(root, text="Deck specification").grid(row=2, column=0, sticky="w", pady=6)
-        ttk.Entry(root, textvariable=self.spec_var).grid(
+        ttk.Label(root, text="Source PowerPoint").grid(row=2, column=0, sticky="w", pady=6)
+        ttk.Entry(root, textvariable=self.source_var).grid(
             row=2, column=1, sticky="ew", padx=(12, 8), pady=6
         )
-        ttk.Button(root, text="Browse", command=self._browse_spec).grid(row=2, column=2, pady=6)
+        ttk.Button(root, text="Browse", command=self._browse_source).grid(row=2, column=2, pady=6)
 
         ttk.Label(root, text="Output PowerPoint").grid(row=3, column=0, sticky="w", pady=6)
         ttk.Entry(root, textvariable=self.output_var).grid(
@@ -54,28 +52,32 @@ class PresentUI(tk.Tk):
         actions = ttk.Frame(root)
         actions.grid(row=4, column=0, columnspan=3, sticky="w", pady=(22, 14))
 
-        ttk.Button(actions, text="Build PowerPoint", command=self._build_deck).pack(side="left")
+        ttk.Button(actions, text="Build From Existing Deck", command=self._build_from_source).pack(side="left")
         ttk.Button(actions, text="Open Output", command=self._open_output).pack(side="left", padx=8)
         ttk.Button(actions, text="Open Output Folder", command=self._open_output_folder).pack(side="left")
 
         ttk.Separator(root).grid(row=5, column=0, columnspan=3, sticky="ew", pady=(4, 12))
-        ttk.Label(root, text="Status:").grid(row=6, column=0, sticky="w")
-        ttk.Label(root, textvariable=self.status_var).grid(row=6, column=1, columnspan=2, sticky="w")
+        ttk.Label(root, text="Status:").grid(row=6, column=0, sticky="nw")
+        ttk.Label(root, textvariable=self.status_var, wraplength=610).grid(
+            row=6, column=1, columnspan=2, sticky="w"
+        )
 
         root.columnconfigure(1, weight=1)
 
-    def _browse_spec(self):
+    def _browse_source(self):
         path = filedialog.askopenfilename(
-            title="Select PRESENT deck specification",
-            initialdir=str(BASE_DIR / "specs"),
-            filetypes=[("JSON specification", "*.json"), ("All files", "*.*")],
+            title="Select existing PowerPoint",
+            filetypes=[("PowerPoint presentation", "*.pptx"), ("All files", "*.*")],
         )
         if path:
-            self.spec_var.set(path)
+            self.source_var.set(path)
+            source = Path(path)
+            self.output_var.set(str(BASE_DIR / "output" / f"{source.stem}_PRESENT.pptx"))
+            self.status_var.set("Source deck selected. PRESENT will preserve it and append slides from the embedded Markdown brief.")
 
     def _browse_output(self):
         path = filedialog.asksaveasfilename(
-            title="Save PowerPoint",
+            title="Save amended PowerPoint",
             initialdir=str(BASE_DIR / "output"),
             initialfile="PEARL_PRESENT_MVE.pptx",
             defaultextension=".pptx",
@@ -84,24 +86,37 @@ class PresentUI(tk.Tk):
         if path:
             self.output_var.set(path)
 
-    def _build_deck(self):
-        spec_path = Path(self.spec_var.get()).expanduser()
+    def _build_from_source(self):
+        source_path = Path(self.source_var.get()).expanduser()
         output_path = Path(self.output_var.get()).expanduser()
 
-        if not spec_path.exists():
-            messagebox.showerror("PRESENT", f"Specification not found:\n{spec_path}")
+        if not source_path.exists():
+            messagebox.showerror("PRESENT", "Choose an existing PowerPoint first.")
+            return
+
+        if source_path.resolve() == output_path.resolve():
+            messagebox.showerror("PRESENT", "Output must be a different file so the source deck is not overwritten.")
             return
 
         try:
-            self.status_var.set("Building...")
+            self.status_var.set("Reading source deck and embedded Markdown instructions...")
             self.update_idletasks()
 
-            with spec_path.open("r", encoding="utf-8") as handle:
-                spec = json.load(handle)
+            result = amend_deck(str(source_path), str(output_path))
 
-            build_deck(spec, str(output_path))
-            self.status_var.set(f"Built successfully: {output_path.name}")
-            messagebox.showinfo("PRESENT", f"PowerPoint created successfully.\n\n{output_path}")
+            self.status_var.set(
+                f"Built successfully. Markdown found on slide {result['markdown_slide']}; "
+                f"preserved {result['original_slide_count']} existing slides and added "
+                f"{result['added_slide_count']} new slides."
+            )
+            messagebox.showinfo(
+                "PRESENT",
+                "PRESENT completed the first amendment pass.\n\n"
+                f"Source slides preserved: {result['original_slide_count']}\n"
+                f"Slides added: {result['added_slide_count']}\n"
+                f"Final slides: {result['final_slide_count']}\n\n"
+                f"Output:\n{output_path}"
+            )
         except Exception as exc:
             self.status_var.set("Build failed")
             messagebox.showerror("PRESENT", f"Build failed:\n\n{exc}")
