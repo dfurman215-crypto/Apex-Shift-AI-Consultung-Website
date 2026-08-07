@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -16,13 +17,17 @@ class PresentUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PRESENT MVE")
-        self.geometry("850x400")
-        self.minsize(790, 360)
+        self.geometry("870x460")
+        self.minsize(810, 420)
 
         self.source_var = tk.StringVar(value="")
         self.output_var = tk.StringVar(value=str(DEFAULT_OUTPUT))
         self.use_agent_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Choose your existing PowerPoint to begin.")
+        self.progress_var = tk.StringVar(value="Idle")
+
+        self.build_button = None
+        self.progress = None
 
         self._build_ui()
 
@@ -57,16 +62,31 @@ class PresentUI(tk.Tk):
         ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(12, 4))
 
         actions = ttk.Frame(root)
-        actions.grid(row=5, column=0, columnspan=3, sticky="w", pady=(18, 14))
+        actions.grid(row=5, column=0, columnspan=3, sticky="w", pady=(18, 10))
 
-        ttk.Button(actions, text="Build From Existing Deck", command=self._build_from_source).pack(side="left")
+        self.build_button = ttk.Button(
+            actions,
+            text="Build From Existing Deck",
+            command=self._build_from_source,
+        )
+        self.build_button.pack(side="left")
         ttk.Button(actions, text="Open Output", command=self._open_output).pack(side="left", padx=8)
         ttk.Button(actions, text="Open Output Folder", command=self._open_output_folder).pack(side="left")
 
-        ttk.Separator(root).grid(row=6, column=0, columnspan=3, sticky="ew", pady=(4, 12))
-        ttk.Label(root, text="Status:").grid(row=7, column=0, sticky="nw")
-        ttk.Label(root, textvariable=self.status_var, wraplength=640).grid(
-            row=7, column=1, columnspan=2, sticky="w"
+        progress_frame = ttk.Frame(root)
+        progress_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(2, 10))
+        progress_frame.columnconfigure(0, weight=1)
+
+        self.progress = ttk.Progressbar(progress_frame, mode="indeterminate")
+        self.progress.grid(row=0, column=0, sticky="ew")
+        ttk.Label(progress_frame, textvariable=self.progress_var).grid(
+            row=1, column=0, sticky="w", pady=(4, 0)
+        )
+
+        ttk.Separator(root).grid(row=7, column=0, columnspan=3, sticky="ew", pady=(4, 12))
+        ttk.Label(root, text="Status:").grid(row=8, column=0, sticky="nw")
+        ttk.Label(root, textvariable=self.status_var, wraplength=650).grid(
+            row=8, column=1, columnspan=2, sticky="w"
         )
 
         root.columnconfigure(1, weight=1)
@@ -80,7 +100,10 @@ class PresentUI(tk.Tk):
             self.source_var.set(path)
             source = Path(path)
             self.output_var.set(str(BASE_DIR / "output" / f"{source.stem}_PRESENT.pptx"))
-            self.status_var.set("Source deck selected. PRESENT will preserve it and append slides from the embedded Markdown brief.")
+            self.status_var.set(
+                "Source deck selected. PRESENT will preserve it and append slides from the embedded Markdown brief."
+            )
+            self.progress_var.set("Ready to build")
 
     def _browse_output(self):
         path = filedialog.asksaveasfilename(
@@ -105,40 +128,77 @@ class PresentUI(tk.Tk):
             messagebox.showerror("PRESENT", "Output must be a different file so the source deck is not overwritten.")
             return
 
-        try:
-            if self.use_agent_var.get():
-                self.status_var.set("Reading source deck and asking local Gemma to plan the new slides...")
-            else:
-                self.status_var.set("Reading source deck and parsing embedded Markdown instructions...")
-            self.update_idletasks()
+        self._set_building(True)
+        self.status_var.set("Build started. PRESENT is processing the source deck.")
+        self.progress_var.set("Starting build...")
 
+        thread = threading.Thread(
+            target=self._run_build,
+            args=(source_path, output_path, self.use_agent_var.get()),
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_build(self, source_path: Path, output_path: Path, use_agent: bool):
+        try:
             result = amend_deck(
                 str(source_path),
                 str(output_path),
-                use_agent=self.use_agent_var.get(),
+                use_agent=use_agent,
+                progress_callback=self._report_progress,
             )
-
-            planner_note = f"Planner: {result['planner']}."
-            if result.get("agent_error"):
-                planner_note += " Local Gemma was unavailable or returned an invalid plan, so PRESENT used its deterministic fallback."
-
-            self.status_var.set(
-                f"Built successfully. {planner_note} Markdown found on slide {result['markdown_slide']}; "
-                f"preserved {result['original_slide_count']} existing slides and added "
-                f"{result['added_slide_count']} new slides."
-            )
-            messagebox.showinfo(
-                "PRESENT",
-                "PRESENT completed the amendment pass.\n\n"
-                f"Planner: {result['planner']}\n"
-                f"Source slides preserved: {result['original_slide_count']}\n"
-                f"Slides added: {result['added_slide_count']}\n"
-                f"Final slides: {result['final_slide_count']}\n\n"
-                f"Output:\n{output_path}"
-            )
+            self.after(0, self._build_succeeded, result, output_path)
         except Exception as exc:
-            self.status_var.set("Build failed")
-            messagebox.showerror("PRESENT", f"Build failed:\n\n{exc}")
+            self.after(0, self._build_failed, str(exc))
+
+    def _report_progress(self, message: str):
+        self.after(0, self.progress_var.set, message)
+        self.after(0, self.status_var.set, message)
+
+    def _set_building(self, building: bool):
+        if building:
+            if self.build_button:
+                self.build_button.state(["disabled"])
+            if self.progress:
+                self.progress.start(12)
+        else:
+            if self.build_button:
+                self.build_button.state(["!disabled"])
+            if self.progress:
+                self.progress.stop()
+
+    def _build_succeeded(self, result: dict, output_path: Path):
+        self._set_building(False)
+        self.progress_var.set("Build complete")
+
+        planner_note = f"Planner: {result['planner']}."
+        if result.get("agent_error"):
+            planner_note += (
+                " Local Gemma was unavailable or returned an invalid plan, "
+                "so PRESENT used its deterministic fallback."
+            )
+
+        self.status_var.set(
+            f"Built successfully. {planner_note} Markdown found on slide {result['markdown_slide']}; "
+            f"preserved {result['original_slide_count']} existing slides and added "
+            f"{result['added_slide_count']} new slides."
+        )
+        messagebox.showinfo(
+            "PRESENT",
+            "PRESENT completed the amendment pass.\n\n"
+            f"Planner: {result['planner']}\n"
+            f"Source slides preserved: {result['original_slide_count']}\n"
+            f"Slides added: {result['added_slide_count']}\n"
+            f"Final slides: {result['final_slide_count']}\n"
+            f"Source images cataloged: {result.get('asset_count', 0)}\n\n"
+            f"Output:\n{output_path}"
+        )
+
+    def _build_failed(self, error_message: str):
+        self._set_building(False)
+        self.progress_var.set("Build failed")
+        self.status_var.set("Build failed")
+        messagebox.showerror("PRESENT", f"Build failed:\n\n{error_message}")
 
     def _open_output(self):
         path = Path(self.output_var.get()).expanduser()
