@@ -16,11 +16,12 @@ class PresentUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PRESENT MVE")
-        self.geometry("820x360")
-        self.minsize(760, 330)
+        self.geometry("850x400")
+        self.minsize(790, 360)
 
         self.source_var = tk.StringVar(value="")
         self.output_var = tk.StringVar(value=str(DEFAULT_OUTPUT))
+        self.use_agent_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Choose your existing PowerPoint to begin.")
 
         self._build_ui()
@@ -49,17 +50,23 @@ class PresentUI(tk.Tk):
         )
         ttk.Button(root, text="Browse", command=self._browse_output).grid(row=3, column=2, pady=6)
 
+        ttk.Checkbutton(
+            root,
+            text="Use local Gemma planner through Ollama (falls back to deterministic parser if unavailable)",
+            variable=self.use_agent_var,
+        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(12, 4))
+
         actions = ttk.Frame(root)
-        actions.grid(row=4, column=0, columnspan=3, sticky="w", pady=(22, 14))
+        actions.grid(row=5, column=0, columnspan=3, sticky="w", pady=(18, 14))
 
         ttk.Button(actions, text="Build From Existing Deck", command=self._build_from_source).pack(side="left")
         ttk.Button(actions, text="Open Output", command=self._open_output).pack(side="left", padx=8)
         ttk.Button(actions, text="Open Output Folder", command=self._open_output_folder).pack(side="left")
 
-        ttk.Separator(root).grid(row=5, column=0, columnspan=3, sticky="ew", pady=(4, 12))
-        ttk.Label(root, text="Status:").grid(row=6, column=0, sticky="nw")
-        ttk.Label(root, textvariable=self.status_var, wraplength=610).grid(
-            row=6, column=1, columnspan=2, sticky="w"
+        ttk.Separator(root).grid(row=6, column=0, columnspan=3, sticky="ew", pady=(4, 12))
+        ttk.Label(root, text="Status:").grid(row=7, column=0, sticky="nw")
+        ttk.Label(root, textvariable=self.status_var, wraplength=640).grid(
+            row=7, column=1, columnspan=2, sticky="w"
         )
 
         root.columnconfigure(1, weight=1)
@@ -99,19 +106,31 @@ class PresentUI(tk.Tk):
             return
 
         try:
-            self.status_var.set("Reading source deck and embedded Markdown instructions...")
+            if self.use_agent_var.get():
+                self.status_var.set("Reading source deck and asking local Gemma to plan the new slides...")
+            else:
+                self.status_var.set("Reading source deck and parsing embedded Markdown instructions...")
             self.update_idletasks()
 
-            result = amend_deck(str(source_path), str(output_path))
+            result = amend_deck(
+                str(source_path),
+                str(output_path),
+                use_agent=self.use_agent_var.get(),
+            )
+
+            planner_note = f"Planner: {result['planner']}."
+            if result.get("agent_error"):
+                planner_note += " Local Gemma was unavailable or returned an invalid plan, so PRESENT used its deterministic fallback."
 
             self.status_var.set(
-                f"Built successfully. Markdown found on slide {result['markdown_slide']}; "
+                f"Built successfully. {planner_note} Markdown found on slide {result['markdown_slide']}; "
                 f"preserved {result['original_slide_count']} existing slides and added "
                 f"{result['added_slide_count']} new slides."
             )
             messagebox.showinfo(
                 "PRESENT",
-                "PRESENT completed the first amendment pass.\n\n"
+                "PRESENT completed the amendment pass.\n\n"
+                f"Planner: {result['planner']}\n"
                 f"Source slides preserved: {result['original_slide_count']}\n"
                 f"Slides added: {result['added_slide_count']}\n"
                 f"Final slides: {result['final_slide_count']}\n\n"
