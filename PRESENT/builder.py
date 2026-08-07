@@ -85,6 +85,32 @@ def build_comparison(prs, slide_spec):
     return slide
 
 
+def build_content(prs, slide_spec):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.background.fill.solid()
+    slide.background.fill.fore_color.rgb = design.PEARL_WHITE
+    _add_title(slide, slide_spec["headline"])
+
+    if slide_spec.get("subheadline"):
+        _add_subtitle(slide, slide_spec["subheadline"], top=1.45)
+
+    box = slide.shapes.add_textbox(Inches(1.0), Inches(2.15), Inches(11.2), Inches(4.55))
+    tf = box.text_frame
+    tf.clear()
+    tf.word_wrap = True
+
+    items = slide_spec.get("items", [])
+    if not items:
+        items = [slide_spec.get("body", "")]
+
+    for index, item in enumerate(items):
+        p = tf.paragraphs[0] if index == 0 else tf.add_paragraph()
+        p.text = item
+        p.space_after = design.SMALL_SIZE
+        _set_text_style(p, design.BODY_SIZE, design.CHARCOAL)
+    return slide
+
+
 def build_statement(prs, slide_spec):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     slide.background.fill.solid()
@@ -110,22 +136,25 @@ def build_statement(prs, slide_spec):
 BUILDERS = {
     "hero": build_hero,
     "comparison": build_comparison,
+    "content": build_content,
     "statement": build_statement,
 }
+
+
+def add_slides(prs, spec: dict):
+    for slide_spec in spec.get("slides", []):
+        slide_type = slide_spec.get("type")
+        if slide_type not in BUILDERS:
+            raise ValueError(f"Unsupported slide type: {slide_type}")
+        BUILDERS[slide_type](prs, slide_spec)
+    return prs
 
 
 def build_deck(spec: dict, output_path: str):
     prs = Presentation()
     prs.slide_width = design.SLIDE_WIDTH
     prs.slide_height = design.SLIDE_HEIGHT
-
-    # Remove the starter slide collection by simply using the blank presentation as-is;
-    # python-pptx creates no slides until one is explicitly added.
-    for slide_spec in spec.get("slides", []):
-        slide_type = slide_spec.get("type")
-        if slide_type not in BUILDERS:
-            raise ValueError(f"Unsupported slide type: {slide_type}")
-        BUILDERS[slide_type](prs, slide_spec)
+    add_slides(prs, spec)
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     prs.save(output_path)
