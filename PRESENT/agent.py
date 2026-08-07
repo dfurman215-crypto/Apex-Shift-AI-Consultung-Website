@@ -1,152 +1,241 @@
+from __future__ import annotations
+
 import json
-import urllib.error
-import urllib.request
+from pathlib import Path
 
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "gemma3:4b"
-ALLOWED_SLIDE_TYPES = {"hero", "comparison", "content", "statement"}
+ALLOWED_SLIDE_TYPES = {
+    "hero",
+    "metaphor",
+    "comparison",
+    "content",
+    "process",
+    "lifecycle",
+    "collaboration",
+    "roadmap",
+    "layers",
+    "ecosystem",
+    "pricing",
+    "benchmark",
+    "statement",
+}
 
 
 class LocalAgentUnavailable(RuntimeError):
     pass
 
 
-def _request_json(url: str, payload: dict | None = None, timeout: int = 120) -> dict:
-    data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="GET" if payload is None else "POST",
-    )
+def _client():
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise LocalAgentUnavailable(f"Local Ollama is unavailable: {exc}") from exc
+        from ollama import Client
+    except ImportError as exc:
+        raise LocalAgentUnavailable(
+            "The local Ollama Python client is not installed. Run: python -m pip install -r requirements.txt"
+        ) from exc
+    return Client(host=OLLAMA_BASE_URL)
 
 
 def ollama_available(model: str = DEFAULT_MODEL) -> bool:
     try:
-        result = _request_json(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-    except LocalAgentUnavailable:
+        client = _client()
+        client.show(model)
+        return True
+    except Exception:
         return False
-
-    names = {item.get("name", "") for item in result.get("models", [])}
-    return model in names or any(name.startswith(f"{model}:") for name in names)
 
 
 def _deck_context(deck_info: dict) -> str:
     lines = []
     for slide in deck_info.get("slides", []):
         text = slide.get("text", "").strip()
-        # The embedded Markdown itself is supplied separately, so avoid duplicating a huge block.
         if "# Apex Shift PEARL Playbook" in text or "# Slide Blueprint" in text:
             text = "[Embedded presentation brief omitted here; supplied separately.]"
-        if len(text) > 1200:
-            text = text[:1200] + "..."
-        lines.append(f"Slide {slide.get('number')}: {text or '[visual/no extracted text]'}")
+        if len(text) > 1000:
+            text = text[:1000] + "..."
+        lines.append(
+            f"Slide {slide.get('number')}: {text or '[visual/no extracted text]'} "
+            f"(shapes: {slide.get('shape_count', '?')})"
+        )
     return "\n\n".join(lines)
+
+
+def _asset_context(assets: list[dict] | None) -> str:
+    if not assets:
+        return "No reusable picture assets were extracted from the source deck."
+    lines = [
+        "Reusable picture assets are shown in the attached contact sheet. "
+        "Each tile is labeled with its asset ID and source slide."
+    ]
+    for asset in assets:
+        dims = ""
+        if asset.get("width") and asset.get("height"):
+            dims = f" {asset['width']}x{asset['height']}px"
+        lines.append(f"{asset['id']}: source slide {asset['slide']},{dims} file={asset['filename']}")
+    return "\n".join(lines)
+
+
+def _as_list(value, limit=8):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        return [str(value)]
+    return value[:limit]
 
 
 def _validate_spec(spec: dict) -> dict:
     if not isinstance(spec, dict):
         raise ValueError("Gemma did not return a JSON object.")
-
     slides = spec.get("slides")
     if not isinstance(slides, list) or not slides:
         raise ValueError("Gemma returned no slides.")
 
     cleaned = []
-    for index, slide in enumerate(slides, start=1):
-        if not isinstance(slide, dict):
+    for index, raw_slide in enumerate(slides, start=1):
+        if not isinstance(raw_slide, dict):
             raise ValueError(f"Slide {index} is not a JSON object.")
-        slide_type = slide.get("type", "content")
+        slide = dict(raw_slide)
+        slide_type = str(slide.get("type", "content")).lower().strip()
         if slide_type not in ALLOWED_SLIDE_TYPES:
             slide_type = "content"
         slide["type"] = slide_type
         slide.setdefault("headline", f"Slide {index}")
+
+        for key in ("items", "left", "right", "left_items", "right_items", "strategic", "tactical", "layers", "nodes", "factors", "metrics", "stages"):
+            if key in slide:
+                slide[key] = _as_list(slide[key], 8)
+
         if slide_type == "comparison":
             slide.setdefault("left_title", "Current")
-            slide.setdefault("left", [])
             slide.setdefault("right_title", "Target")
+            slide.setdefault("left", [])
             slide.setdefault("right", [])
         elif slide_type == "content":
-            items = slide.get("items", [])
-            if isinstance(items, str):
-                items = [items]
-            slide["items"] = [str(item) for item in items][:10]
+            slide.setdefault("items", [])
+        elif slide_type in {"process", "lifecycle"}:
+            slide.setdefault("stages", slide.get("items", []))
+        elif slide_type == "collaboration":
+            slide.setdefault("left_title", "Apex Shift")
+            slide.setdefault("right_title", "Client")
+            slide.setdefault("center", "Collaboration")
+        elif slide_type == "roadmap":
+            slide.setdefault("strategic", [])
+            slide.setdefault("tactical", [])
+        elif slide_type == "layers":
+            slide.setdefault("center", "Pilot")
+            slide.setdefault("layers", slide.get("items", []))
+        elif slide_type == "ecosystem":
+            slide.setdefault("center", "Integrated System")
+            slide.setdefault("nodes", slide.get("items", []))
+        elif slide_type == "pricing":
+            slide.setdefault("formula", ["Scope", "Effort", "Price"])
+            slide.setdefault("factors", slide.get("items", []))
+        elif slide_type == "benchmark":
+            slide.setdefault("metrics", [])
+
         cleaned.append(slide)
 
     return {
         "deck": str(spec.get("deck", "PRESENT Local Gemma Plan")),
-        "version": str(spec.get("version", "0.1")),
+        "version": str(spec.get("version", "0.2")),
         "slides": cleaned,
     }
 
 
-def plan_deck_with_gemma(deck_info: dict, markdown_text: str, model: str = DEFAULT_MODEL) -> dict:
+def plan_deck_with_gemma(
+    deck_info: dict,
+    markdown_text: str,
+    assets: list[dict] | None = None,
+    contact_sheet: str | None = None,
+    model: str = DEFAULT_MODEL,
+) -> dict:
     if not ollama_available(model):
         raise LocalAgentUnavailable(
-            f"Ollama model '{model}' is not available locally. Start Ollama and ensure the model is installed."
+            f"Local Ollama model '{model}' is not available. Start Ollama and ensure the model is installed."
         )
 
     prompt = f"""
-You are the local planning agent for PRESENT, a presentation-building engine.
+You are the local presentation planning agent for PRESENT.
 
-Your job is to interpret an EXISTING PowerPoint deck plus an embedded Markdown presentation brief and produce a JSON slide plan for NEW slides that PRESENT will append to a copy of the existing deck.
+Your job is to turn an EXISTING PowerPoint deck plus its embedded Markdown brief into a visually intentional executive slide plan. Python will render your JSON using native PowerPoint shapes and extracted source imagery.
 
-HARD RULES:
-1. Use only information supported by the existing deck or embedded brief. Do not invent facts, research, prices, statistics, claims, or citations.
-2. The deck should teach the business methodology described in the brief. Pearl imagery is a teaching metaphor, not the subject.
-3. Preserve the brief's intended narrative order and numbered slide blueprint.
-4. One dominant idea per slide. Keep text concise and speaker-driven.
-5. The current MVE builder supports ONLY these slide types: hero, comparison, content, statement.
-6. Return JSON ONLY. No markdown fences and no explanation.
-7. Prefer exactly one output slide for each numbered section in the brief's Slide Blueprint.
-8. For content slides, use at most 8 short items. Do not paste paragraphs from the brief.
-9. For comparison slides, use left_title, left, right_title, right.
-10. For hero/statement slides, use headline and optional subheadline.
-11. Preserve important wording from the brief when it is clearly intentional.
-12. Include a short visual_direction string on each slide describing the desired future visual treatment. The current builder may ignore it, but PRESENT will retain it for later refinement.
+DESIGN STANDARD
+- Apple keynote simplicity plus McKinsey consulting clarity.
+- One dominant idea per slide.
+- Minimal text, strong hierarchy, whitespace, visual storytelling.
+- Use the pearl imagery as a teaching metaphor, not decoration for its own sake.
+- Do not merely turn every paragraph into bullets.
+- Reuse source-deck images when they materially improve the story.
+- Never invent facts, prices, statistics, citations, or claims.
 
-Required JSON shape:
+SUPPORTED VISUAL ARCHETYPES
+hero: cover or major opening statement. Fields: headline, subheadline, optional asset_id.
+metaphor: source image paired with one conceptual message. Fields: headline, subheadline, message OR items, optional asset_id.
+comparison: two-sided contrast. Fields: headline, left_title, left[], right_title, right[].
+content: 2-6 concise executive idea cards. Fields: headline, subheadline, items[].
+process: 3-5 sequential stages. Fields: headline, subheadline, stages[] where each stage is {{"label":"...","detail":"..."}}.
+lifecycle: 3-5 maturity stages. Same stage format as process.
+collaboration: two parties feeding a shared center. Fields: headline, left_title, left_items[], center, center_detail, right_title, right_items[].
+roadmap: synchronized strategic and tactical lanes. Fields: headline, strategic_title, strategic[], tactical_title, tactical[], cadence.
+layers: progressive layering around a nucleus. Fields: headline, center, layers[] where each layer may be {{"label":"...","detail":"..."}}.
+ecosystem: central capability connected to surrounding nodes. Fields: headline, center, nodes[], optional asset_id.
+pricing: pricing logic. Fields: headline, formula[], factors[], payment.
+benchmark: market-context metric cards. Fields: headline, metrics[] where each metric is {{"label":"...","value":"...","detail":"..."}}.
+statement: closing or major declaration. Fields: headline, subheadline, optional asset_id.
+
+HARD RULES
+1. Return JSON only. No markdown fences or commentary.
+2. Prefer exactly one output slide for each numbered section in the brief's Slide Blueprint.
+3. Preserve the intended narrative order.
+4. Use the richest appropriate archetype rather than defaulting to content.
+5. Keep individual labels short. Keep detail text to one sentence or less.
+6. Use no more than 6 items/nodes/factors on one slide unless the brief clearly requires more.
+7. If the contact sheet is attached, inspect it. Use asset_id only for an image that actually supports that slide.
+8. Do not assign the same asset to every slide. A few strong image-led slides are better than visual clutter.
+9. Keep PEARL Methodology (how Apex Shift works) distinct from Capability Lifecycle (what gets progressively built) if the brief makes that distinction.
+10. Preserve source-supported benchmark numbers exactly when using them.
+
+Required output shape:
 {{
   "deck": "...",
-  "version": "0.1",
-  "slides": [
-    {{"type":"hero","headline":"...","subheadline":"...","visual_direction":"..."}},
-    {{"type":"comparison","headline":"...","left_title":"...","left":["..."],"right_title":"...","right":["..."],"visual_direction":"..."}},
-    {{"type":"content","headline":"...","subheadline":"...","items":["..."],"visual_direction":"..."}},
-    {{"type":"statement","headline":"...","subheadline":"...","visual_direction":"..."}}
-  ]
+  "version": "0.2",
+  "slides": [ ... ]
 }}
 
 EXISTING DECK INVENTORY:
 {_deck_context(deck_info)}
 
+SOURCE IMAGE CATALOG:
+{_asset_context(assets)}
+
 EMBEDDED MARKDOWN BRIEF:
 {markdown_text}
 """.strip()
 
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "format": "json",
-        "options": {
-            "temperature": 0.15,
-        },
+    message = {
+        "role": "user",
+        "content": prompt,
     }
+    if contact_sheet and Path(contact_sheet).exists():
+        message["images"] = [str(Path(contact_sheet))]
 
-    result = _request_json(f"{OLLAMA_BASE_URL}/api/generate", payload=payload, timeout=240)
-    raw = result.get("response", "").strip()
+    try:
+        response = _client().chat(
+            model=model,
+            messages=[message],
+            format="json",
+            options={"temperature": 0.12},
+        )
+    except Exception as exc:
+        raise LocalAgentUnavailable(f"Local Gemma planning call failed: {exc}") from exc
+
+    raw = response.message.content.strip()
     if not raw:
         raise ValueError("Gemma returned an empty response.")
-
     try:
         spec = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Gemma returned invalid JSON: {exc}") from exc
-
     return _validate_spec(spec)
