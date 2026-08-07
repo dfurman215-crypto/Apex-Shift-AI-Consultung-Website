@@ -1,0 +1,34 @@
+{
+  "deck": "Apex Shift PEARL Methodology",
+  "version": "0.1",
+  "slides": [
+    {
+      "type": "hero",
+      "headline": "The PEARL Methodology",
+      "subheadline": "Pilot • Engagement • Roadmap • Layering"
+    },
+    {
+      "type": "comparison",
+      "headline": "Why PEARL Exists",
+      "left_title": "Traditional Project",
+      "left": [
+        "Large scope",
+        "Higher early commitment",
+        "Longer path to visible value",
+        "More uncertainty before delivery"
+      ],
+      "right_title": "PEARL",
+      "right": [
+        "Small focused pilot",
+        "Progressive investment",
+        "Visible value earlier",
+        "Continuous collaboration and lower risk"
+      ]
+    },
+    {
+      "type": "statement",
+      "headline": "We Progressively Layer Business Value.",
+      "subheadline": "PEARL turns a focused opportunity into a mature, integrated business capability."
+    }
+  ]
+}
